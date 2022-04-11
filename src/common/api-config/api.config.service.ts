@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { ApiConfigDto } from "src/endpoints/third-party/entities/dto/apiConfig.dto";
 
 @Injectable()
 export class ApiConfigService {
@@ -208,5 +209,9 @@ export class ApiConfigService {
     }
 
     return admins;
+  }
+
+  getThirdPartyApiConfig(name: string): any {
+    return this.configService.get<ApiConfigDto>('thirdPartyApisConfigs.' + name);
   }
 }

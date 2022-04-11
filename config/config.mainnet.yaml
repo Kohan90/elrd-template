@@ -31,3 +31,13 @@ features:
 security:
   jwtSecret: ''
   admins:
+thirdPartyApisConfigs:
+  firstApi: {
+      baseUrl: 'http://127.0.0.1:3001',
+      endpoints: {
+        token: '/token',
+        action: '/action',
+        credentials: '/credentials',
+        authAction: '/auth-action'
+      }
+  }

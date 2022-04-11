@@ -9,7 +9,6 @@ import { MicroserviceModule } from './common/microservice/microservice.module';
 import { TestSocketController } from './endpoints/test-sockets/test.socket.controller';
 import { TestSocketModule } from './endpoints/test-sockets/test.socket.module';
 
-
 @Module({
   imports: [
     ApiConfigModule,
