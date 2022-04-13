@@ -1,15 +1,10 @@
-import { HttpException, HttpStatus, Injectable, UnauthorizedException } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom, map } from 'rxjs';
 import { MessageDto } from './entities/dto/message.dto';
-import { SignedMessageDto } from './entities/dto/signedMessage.dto';
-import { SignedJWTMessageDto } from './entities/dto/signedJWTMessage.dto';
 import { SignatureDto } from './entities/dto/signature.dto';
 import { ApiConfigDto } from './entities/dto/apiConfig.dto';
-import { CachingService } from 'src/common/caching/caching.service';
-import Crypto = require('crypto');
-import { readFileSync } from 'fs';
-import { join } from 'path';
+import { UserSecretKey, UserWallet } from '@elrondnetwork/erdjs/out';
 
 @Injectable()
 export class ThirdPartyService {
@@ -23,8 +18,7 @@ export class ThirdPartyService {
     }
 
     constructor(
-        private httpService: HttpService,
-        private cachingService: CachingService
+        private httpService: HttpService
     ) { }
 
     /**
@@ -32,13 +26,13 @@ export class ThirdPartyService {
      * @param client_id 
      * @returns 
      */
-    async startFirstScenario(client_id: string): Promise<any> {
+    async startFirstScenario(wallet: UserWallet, secretKey: UserSecretKey): Promise<any> {
         try {
-            const signatureObject = await this.getTokenSignature(client_id);
+            const signatureObject = await this.getTokenSignature(wallet, secretKey);
 
             return await this.performThirdPartyAction(signatureObject.token, signatureObject.signature);
-
         } catch (error: any) {
+            console.log(error);
             throw new HttpException({
                 status: HttpStatus.FORBIDDEN,
                 error: error.response?.data,
@@ -52,18 +46,19 @@ export class ThirdPartyService {
      * @param forceRegeneration 
      * @returns 
      */
-    async startSecondScenario(client_id: string, force?: boolean): Promise<any> {
+    async startSecondScenario(wallet: UserWallet, secretKey: UserSecretKey): Promise<any> {
         try {
-            const jwt = await this.generateThirdPartyCredentials(client_id, force);
+            const jwt = await this.generateThirdPartyCredentials(wallet, secretKey);
 
             for (let i = 0; i < 10; i++) {
-                console.log('Performing action ' + i + ' for jwt ' + jwt);
+                console.log('Performing action ' + i + ' for jwt ' + jwt.jwt);
 
-                await this.performThirdPartyCredentialsAction(jwt, client_id, i);
+                await this.performThirdPartyCredentialsAction(jwt.jwt);
             }
 
             return '<h2>Second scenario finished!</h2>';
         } catch (error: any) {
+            console.log(error);
             throw new HttpException({
                 status: HttpStatus.FORBIDDEN,
                 error: error.response?.data,
@@ -77,23 +72,11 @@ export class ThirdPartyService {
      * @param forceRegeneration 
      * @returns 
      */
-    async generateThirdPartyCredentials(client_id: string, force?: boolean): Promise<any> {
+    async generateThirdPartyCredentials(wallet: UserWallet, secretKey: UserSecretKey): Promise<any> {
         try {
-            const generatedJwt = await this.cachingService.getCacheRemote('elrond-' + client_id);
+            const signatureObject = await this.getTokenSignature(wallet, secretKey);
 
-            if (generatedJwt) {
-                return generatedJwt;
-            } else {
-                if (force) {
-                    const signatureObject = await this.getTokenSignature(client_id);
-
-                    const jwtToken = await this.getThirdPartyCredentials(signatureObject.token, signatureObject.signature, client_id);
-
-                    return await this.cachingService.setCacheRemote('elrond-' + client_id, jwtToken.jwtToken, 3600);
-                } else {
-                    throw new UnauthorizedException('JWT not valid!');
-                }
-            }
+            return await this.getThirdPartyCredentials(signatureObject.token, signatureObject.signature);
         } catch (error: any) {
             console.log(error);
             throw new HttpException({
@@ -108,21 +91,13 @@ export class ThirdPartyService {
      * @param client_id 
      * @returns 
      */
-    async getTokenSignature(client_id: string): Promise<SignatureDto> {
-        const token = await this.getThirdPartyToken(client_id);
+    async getTokenSignature(wallet: UserWallet, secretKey: UserSecretKey): Promise<SignatureDto> {
+        const token = await this.getThirdPartyToken(wallet.toJSON().bech32);
 
-        const privateKey = readFileSync(join(__dirname, '..', '..', '..', '..', 'keys', 'private.pem'));
-
-        const signature = Crypto.sign("sha256",
-            Buffer.from(token.data.value),
-            {
-                key: privateKey,
-                padding: Crypto.constants.RSA_PKCS1_PSS_PADDING,
-            }
-        );
+        const signature = secretKey.sign(Buffer.from(token.data.token, 'base64'));
 
         return {
-            token: token.data.value,
+            token: token.data.token,
             signature: signature.toString('base64'),
         };
     }
@@ -134,11 +109,8 @@ export class ThirdPartyService {
     */
     async getThirdPartyToken(client_id: string): Promise<any> {
         const message = new MessageDto();
-        const publicKey = readFileSync(join(__dirname, '..', '..', '..', '..', 'keys', 'public.pem'), 'utf8');
 
         message.client_id = client_id;
-        message.token_type = '1';
-        message.public_key = publicKey;
 
         if (this.apiConfig) {
             return await firstValueFrom(this.httpService.post(this.apiConfig.baseUrl + this.apiConfig.endpoints.token, message));
@@ -152,13 +124,13 @@ export class ThirdPartyService {
      * @returns 
      */
     async performThirdPartyAction(token: string, signature: string): Promise<any> {
-        const message = new SignedMessageDto();
-
-        message.token = token;
-        message.signature = signature;
+        const headersRequest = {
+            'Authorization': `Bearer ` + token,
+            'Signature': `Bearer ` + signature,
+        };
 
         if (this.apiConfig) {
-            return await firstValueFrom(this.httpService.post(this.apiConfig.baseUrl + this.apiConfig.endpoints.action, message).pipe(
+            return await firstValueFrom(this.httpService.post(this.apiConfig.baseUrl + this.apiConfig.endpoints.action, {}, { headers: headersRequest }).pipe(
                 map(response => response.data),
             ));
         }
@@ -170,14 +142,13 @@ export class ThirdPartyService {
      * @param signature 
      * @returns 
      */
-    async performThirdPartyCredentialsAction(jwt: string, client_id: string, increment: number): Promise<any> {
-        const message = new SignedJWTMessageDto();
-
-        message.jwt = jwt;
-        message.client_id = client_id;
+    async performThirdPartyCredentialsAction(jwt: string): Promise<any> {
+        const headersRequest = {
+            'Authorization': `Bearer ` + jwt,
+        };
 
         if (this.apiConfig) {
-            return await firstValueFrom(this.httpService.post(this.apiConfig.baseUrl + this.apiConfig.endpoints.authAction + '/' + increment, message).pipe(
+            return await firstValueFrom(this.httpService.post(this.apiConfig.baseUrl + this.apiConfig.endpoints.authAction, {}, { headers: headersRequest }).pipe(
                 map(response => response.data),
             ));
         }
@@ -189,15 +160,14 @@ export class ThirdPartyService {
      * @param signature 
      * @returns 
      */
-    async getThirdPartyCredentials(token: string, signature: string, client_id: string): Promise<any> {
-        const message = new SignedMessageDto();
-
-        message.token = token;
-        message.signature = signature;
-        message.client_id = client_id;
+    async getThirdPartyCredentials(token: string, signature: string): Promise<any> {
+        const headersRequest = {
+            'Authorization': `Bearer ` + token,
+            'Signature': `Bearer ` + signature,
+        };
 
         if (this.apiConfig) {
-            return await firstValueFrom(this.httpService.post(this.apiConfig.baseUrl + this.apiConfig.endpoints.credentials, message).pipe(
+            return await firstValueFrom(this.httpService.post(this.apiConfig.baseUrl + this.apiConfig.endpoints.credentials, {}, { headers: headersRequest }).pipe(
                 map(response => response.data),
             ));
         }

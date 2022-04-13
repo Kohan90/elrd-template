@@ -35,9 +35,9 @@ thirdPartyApisConfigs:
   firstApi: {
       baseUrl: 'http://127.0.0.1:3001',
       endpoints: {
-        token: '/token',
-        action: '/action',
-        credentials: '/credentials',
-        authAction: '/auth-action'
+        token: '/auth/token-memory',
+        action: '/auth/action',
+        credentials: '/auth/credentials',
+        authAction: '/auth/credentials-action'
       }
   }
